@@ -1,0 +1,13 @@
+# SAM build artefacts
+.aws-sam/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# AWS credentials
+.env

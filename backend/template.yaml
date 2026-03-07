@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nexus Workspace – Backend API (API Gateway + Lambda) and
+  Frontend Hosting (S3 + CloudFront).
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+    Description: API Gateway deployment stage name.
+
+  CognitoUserPoolArn:
+    Type: String
+    Description: ARN of the existing Cognito User Pool used for API authorization.
+
+  CognitoUserPoolId:
+    Type: String
+    Description: ID of the existing Cognito User Pool (e.g. us-east-1_XXXXXXXXX).
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [development, staging, production]
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+    Layers:
+      - !Ref CommonLayer
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ── Cognito Authorizer ────────────────────────────────────────────────────
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoUserPoolAuthorizer
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      RestApiId: !Ref NexusApi
+      ProviderARNs:
+        - !Ref CognitoUserPoolArn
+
+  # ── API Gateway ───────────────────────────────────────────────────────────
+  NexusApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: NexusWorkspaceApi
+      StageName: !Ref StageName
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !Ref CognitoUserPoolArn
+
+  # ── Shared Lambda Layer ───────────────────────────────────────────────────
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: NexusCommonLayer
+      Description: Shared utilities for all Nexus Lambda functions.
+      ContentUri: layers/common/
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+
+  # ── Notion Review Lambda ──────────────────────────────────────────────────
+  NotionReviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "nexus-notion-review-${Environment}"
+      CodeUri: functions/notion_review_trigger/
+      Handler: handler.lambda_handler
+      Description: Triggers an LLM-based review of Notion topics.
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Events:
+        GetTopics:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/topics
+            Method: GET
+        TriggerReview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/trigger
+            Method: POST
+
+  # ── S3 Bucket (Frontend Static Assets) ───────────────────────────────────
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "nexus-frontend-${AWS::AccountId}-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: NexusWorkspace
+
+  # ── S3 Bucket Policy (CloudFront OAC) ─────────────────────────────────────
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}"
+
+  # ── CloudFront Origin Access Control ─────────────────────────────────────
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: NexusFrontendOAC
+        Description: OAC for Nexus Frontend S3 bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ── CloudFront Distribution ───────────────────────────────────────────────
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Nexus Workspace Frontend – ${Environment}"
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !GetAtt FrontendOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+      Tags:
+        - Key: Project
+          Value: NexusWorkspace
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway base URL
+    Value: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+
+  CloudFrontDomainName:
+    Description: CloudFront distribution domain name (use as the frontend URL)
+    Value: !GetAtt FrontendDistribution.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontDomain"
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (used for cache invalidation in CI/CD)
+    Value: !Ref FrontendDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontDistributionId"
+
+  FrontendBucketName:
+    Description: S3 bucket name for frontend static assets
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendBucketName"

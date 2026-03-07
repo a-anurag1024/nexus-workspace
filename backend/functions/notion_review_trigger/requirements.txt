@@ -1,0 +1,2 @@
+# Runtime dependencies for the notion_review_trigger Lambda function.
+# boto3 is provided by the Lambda runtime – only add additional packages here.
