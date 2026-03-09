@@ -1,45 +1,28 @@
 /**
- * Authentication utilities – thin wrappers around aws-amplify/auth.
+ * Authentication helpers.
+ *
+ * The personal API token is stored in localStorage after the user enters it
+ * on first visit.  It is sent as a Bearer token on every API request.
  */
 
-import {
-  signIn,
-  signOut,
-  getCurrentUser,
-  fetchAuthSession,
-  type AuthUser,
-} from 'aws-amplify/auth';
+const TOKEN_KEY = 'nexus_api_token';
 
-export { signIn, signOut };
-
-/**
- * Returns the currently authenticated user or null if no session exists.
- */
-export async function getAuthUser(): Promise<AuthUser | null> {
-  try {
-    return await getCurrentUser();
-  } catch {
-    return null;
-  }
+export function getToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(TOKEN_KEY);
 }
 
-/**
- * Returns the Cognito JWT id-token for the current session.
- * Throws if the user is not authenticated.
- */
-export async function getIdToken(): Promise<string> {
-  const session = await fetchAuthSession();
-  const token = session.tokens?.idToken?.toString();
-  if (!token) {
-    throw new Error('No id token found – user may not be authenticated.');
-  }
-  return token;
+export function saveToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
-/**
- * Builds an Authorization header object containing the Bearer token.
- */
-export async function authHeaders(): Promise<Record<string, string>> {
-  const token = await getIdToken();
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Returns the Authorization header, or an empty object if no token is stored. */
+export function authHeaders(): Record<string, string> {
+  const token = getToken();
+  if (!token) return {};
   return { Authorization: `Bearer ${token}` };
 }

@@ -1,0 +1,57 @@
+version = 0.1
+
+[default]
+[default.global.parameters]
+region = "ap-south-1"
+
+# ---------------------------------------------------------------------------
+# dev – deploys a real AWS stack for development & integration testing.
+#       Run via: ./deploy-dev.ps1  (reads secrets.dev.json for sensitive values)
+# ---------------------------------------------------------------------------
+[dev]
+[dev.global.parameters]
+region = "ap-south-1"
+
+[dev.build.parameters]
+cached = true
+parallel = true
+
+[dev.deploy.parameters]
+stack_name       = "nexus-workspace-dev"
+resolve_s3       = true
+s3_prefix        = "nexus-workspace-dev"
+region           = "ap-south-1"
+capabilities     = "CAPABILITY_IAM"
+confirm_changeset = false
+# Non-secret parameter overrides; secrets are injected by deploy-dev.ps1.
+parameter_overrides = [
+  "Environment=dev",
+  "StageName=dev",
+  "OpenAIModel=gpt-4.1-nano",
+]
+
+# ---------------------------------------------------------------------------
+# prod – production stack.
+#        Run via: ./deploy-prod.ps1  (reads secrets.prod.json)
+# ---------------------------------------------------------------------------
+[prod]
+[prod.global.parameters]
+region = "ap-south-1"
+
+[prod.build.parameters]
+cached = true
+parallel = true
+
+[prod.deploy.parameters]
+stack_name       = "nexus-workspace-prod"
+resolve_s3       = true
+s3_prefix        = "nexus-workspace-prod"
+region           = "ap-south-1"
+capabilities     = "CAPABILITY_IAM"
+confirm_changeset = true
+parameter_overrides = [
+  "Environment=production",
+  "StageName=prod",
+  "OpenAIModel=gpt-4.1-mini",
+]
+

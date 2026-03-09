@@ -3,67 +3,46 @@
 /**
  * AuthGuard
  *
- * Wraps children in a Cognito authentication check.  If the user is not
- * signed in they are shown a login form; once authenticated the children
- * are rendered.
- *
- * This component handles:
- *  – Configuring Amplify on the client side (only once)
- *  – Checking for an existing session on mount
- *  – Rendering a sign-in form when no session exists
- *  – Signing out the current user
+ * Shows a single-field token prompt on first visit.  The token is saved to
+ * localStorage and sent as a Bearer token on every API request.  On subsequent
+ * visits (same device) the token is loaded automatically — no prompt shown.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
-import { signIn, signOut, getAuthUser } from '@/lib/auth';
-import { configureAmplify } from '@/lib/amplify-config';
-
-// Configure Amplify once at module load time (client-side only).
-if (typeof window !== 'undefined') {
-  configureAmplify();
-}
+import React, { useEffect, useState } from 'react';
+import { getToken, saveToken, clearToken } from '@/lib/auth';
 
 interface AuthGuardProps {
   children: React.ReactNode;
 }
 
 export default function AuthGuard({ children }: AuthGuardProps) {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const checkSession = useCallback(async () => {
-    const user = await getAuthUser();
-    setIsAuthenticated(user !== null);
-  }, []);
 
   useEffect(() => {
-    checkSession();
-  }, [checkSession]);
+    setAuthenticated(getToken() !== null);
+  }, []);
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
-    try {
-      await signIn({ username: email, password });
-      setIsAuthenticated(true);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
-    } finally {
-      setLoading(false);
+    const trimmed = input.trim();
+    if (!trimmed) {
+      setError('Enter your access token.');
+      return;
     }
+    saveToken(trimmed);
+    setAuthenticated(true);
   };
 
-  const handleSignOut = async () => {
-    await signOut();
-    setIsAuthenticated(false);
+  const handleSignOut = () => {
+    clearToken();
+    setAuthenticated(false);
+    setInput('');
   };
 
-  // Loading state
-  if (isAuthenticated === null) {
+  // Checking localStorage
+  if (authenticated === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
@@ -71,58 +50,40 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  // Unauthenticated – show sign-in form
-  if (!isAuthenticated) {
+  // No token – show prompt
+  if (!authenticated) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
           <h1 className="mb-6 text-center text-2xl font-bold text-gray-900">
             Nexus Workspace
           </h1>
-          <form onSubmit={handleSignIn} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label
-                htmlFor="email"
+                htmlFor="token"
                 className="block text-sm font-medium text-gray-700"
               >
-                Email
+                Access Token
               </label>
               <input
-                id="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                placeholder="you@example.com"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-gray-700"
-              >
-                Password
-              </label>
-              <input
-                id="password"
+                id="token"
                 type="password"
                 required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                autoFocus
+                value={input}
+                onChange={(e) => { setInput(e.target.value); setError(null); }}
+                autoComplete="current-password"
                 className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 placeholder="••••••••"
               />
             </div>
-            {error && (
-              <p className="text-sm text-red-600">{error}</p>
-            )}
+            {error && <p className="text-sm text-red-600">{error}</p>}
             <button
               type="submit"
-              disabled={loading}
-              className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
             >
-              {loading ? 'Signing in…' : 'Sign In'}
+              Unlock
             </button>
           </form>
         </div>
@@ -130,7 +91,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  // Authenticated – render dashboard with sign-out button in header
+  // Authenticated – render app with nav
   return (
     <div className="min-h-screen bg-gray-50">
       <nav className="flex items-center justify-between bg-white px-6 py-4 shadow-sm">
@@ -148,3 +109,4 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     </div>
   );
 }
+

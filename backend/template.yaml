@@ -13,18 +13,32 @@ Parameters:
     Default: prod
     Description: API Gateway deployment stage name.
 
-  CognitoUserPoolArn:
+  NotionIntegrationToken:
     Type: String
-    Description: ARN of the existing Cognito User Pool used for API authorization.
+    NoEcho: true
+    Default: ""
+    Description: Notion integration token used to access the Topics database.
 
-  CognitoUserPoolId:
+  NotionTopicsDatabaseId:
     Type: String
-    Description: ID of the existing Cognito User Pool (e.g. us-east-1_XXXXXXXXX).
+    Default: ""
+    Description: Notion database ID for AI-Engineering-Prep/Topics.
+
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: OpenAI API key used by the async review worker.
+
+  OpenAIModel:
+    Type: String
+    Default: gpt-4o-mini
+    Description: OpenAI model used to generate review questions.
 
   Environment:
     Type: String
     Default: production
-    AllowedValues: [development, staging, production]
+    AllowedValues: [dev, development, staging, production]
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -45,17 +59,6 @@ Globals:
 # ---------------------------------------------------------------------------
 Resources:
 
-  # ── Cognito Authorizer ────────────────────────────────────────────────────
-  CognitoAuthorizer:
-    Type: AWS::ApiGateway::Authorizer
-    Properties:
-      Name: CognitoUserPoolAuthorizer
-      Type: COGNITO_USER_POOLS
-      IdentitySource: method.request.header.Authorization
-      RestApiId: !Ref NexusApi
-      ProviderARNs:
-        - !Ref CognitoUserPoolArn
-
   # ── API Gateway ───────────────────────────────────────────────────────────
   NexusApi:
     Type: AWS::Serverless::Api
@@ -67,10 +70,33 @@ Resources:
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: "'*'"
       Auth:
-        DefaultAuthorizer: CognitoAuthorizer
+        DefaultAuthorizer: PersonalTokenAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
         Authorizers:
-          CognitoAuthorizer:
-            UserPoolArn: !Ref CognitoUserPoolArn
+          PersonalTokenAuthorizer:
+            FunctionArn: !GetAtt TokenAuthorizerFunction.Arn
+            FunctionPayloadType: TOKEN
+            Identity:
+              Header: Authorization
+              ReauthorizeEvery: 300
+
+  # ── Personal Token Authorizer ────────────────────────────────────────────────
+  TokenAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "nexus-token-authorizer-${Environment}"
+      CodeUri: functions/token_authorizer/
+      Handler: handler.lambda_handler
+      Description: Validates Bearer token from SSM – protects all API routes.
+      Environment:
+        Variables:
+          SSM_TOKEN_PATH: !Sub "/nexus/${Environment}/personal-api-token"
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nexus/${Environment}/personal-api-token"
 
   # ── Shared Lambda Layer ───────────────────────────────────────────────────
   CommonLayer:
@@ -85,6 +111,41 @@ Resources:
     Metadata:
       BuildMethod: python3.12
 
+  # ── SQS Queue (async review jobs) ──────────────────────────────────────────
+
+  ReviewDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "nexus-review-dlq-${Environment}"
+      MessageRetentionPeriod: 604800  # 7 days
+
+  ReviewQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "nexus-review-queue-${Environment}"
+      VisibilityTimeout: 180          # >= worker Lambda timeout (120 s) + buffer
+      MessageRetentionPeriod: 86400   # 1 day
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ReviewDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # ── DynamoDB Table (async review job state / results) ────────────────────
+
+  ReviewJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "nexus-review-jobs-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
   # ── Notion Review Lambda ──────────────────────────────────────────────────
   NotionReviewFunction:
     Type: AWS::Serverless::Function
@@ -93,8 +154,32 @@ Resources:
       CodeUri: functions/notion_review_trigger/
       Handler: handler.lambda_handler
       Description: Triggers an LLM-based review of Notion topics.
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          NOTION_INTEGRATION_TOKEN: !Ref NotionIntegrationToken
+          NOTION_TOPICS_DATABASE_ID: !Ref NotionTopicsDatabaseId
+          REVIEW_QUEUE_URL: !Ref ReviewQueue
+          REVIEW_JOBS_TABLE_NAME: !Ref ReviewJobsTable
+          REVIEW_TRACKING_BUCKET_NAME: !Ref ReviewTrackingBucket
       Policies:
         - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt ReviewQueue.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ReviewJobsTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "${ReviewTrackingBucket.Arn}/reviews/*"
       Events:
         GetTopics:
           Type: Api
@@ -108,6 +193,66 @@ Resources:
             RestApiId: !Ref NexusApi
             Path: /notion-review/trigger
             Method: POST
+        GetReviewResult:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/results/{requestId}
+            Method: GET
+        LogReview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/log-review
+            Method: POST
+        GetTracker:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/tracker
+            Method: GET
+
+  # ── Async review worker (uses shared SQS + DynamoDB) ─────────────────────
+
+  NotionReviewWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "nexus-notion-review-worker-${Environment}"
+      CodeUri: functions/notion_review_worker/
+      Handler: handler.lambda_handler
+      Description: Processes Notion review jobs from SQS (fetch content + OpenAI questions).
+      Timeout: 120
+      MemorySize: 512
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          NOTION_INTEGRATION_TOKEN: !Ref NotionIntegrationToken
+          NOTION_TOPICS_DATABASE_ID: !Ref NotionTopicsDatabaseId
+          REVIEW_JOBS_TABLE_NAME: !Ref ReviewJobsTable
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          OPENAI_MODEL: !Ref OpenAIModel
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+                - sqs:ChangeMessageVisibility
+              Resource: !GetAtt ReviewQueue.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ReviewJobsTable.Arn
+      Events:
+        ReviewQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ReviewQueue.Arn
+            BatchSize: 1
 
   # ── S3 Bucket (Frontend Static Assets) ───────────────────────────────────
   FrontendBucket:
@@ -193,6 +338,24 @@ Resources:
         - Key: Project
           Value: NexusWorkspace
 
+  # ── S3 Bucket (Review Tracking Data) ────────────────────────────────────
+  ReviewTrackingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "nexus-review-tracking-${AWS::AccountId}-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: NexusWorkspace
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
@@ -220,3 +383,21 @@ Outputs:
     Value: !Ref FrontendBucket
     Export:
       Name: !Sub "${AWS::StackName}-FrontendBucketName"
+
+  ReviewQueueUrl:
+    Description: SQS queue URL for async review jobs
+    Value: !Ref ReviewQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-ReviewQueueUrl"
+
+  ReviewJobsTableName:
+    Description: DynamoDB table name for async review job state/results
+    Value: !Ref ReviewJobsTable
+    Export:
+      Name: !Sub "${AWS::StackName}-ReviewJobsTableName"
+
+  ReviewTrackingBucketName:
+    Description: S3 bucket for monthly review tracking data (calendar UI)
+    Value: !Ref ReviewTrackingBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ReviewTrackingBucketName"
