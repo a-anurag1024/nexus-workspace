@@ -40,8 +40,7 @@ export async function fetchTopics(): Promise<Topic[]> {
   }
 
   const data = await res.json();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data.topics ?? []).map((t: any): Topic => ({
+  return (data.topics ?? []).map((t: Record<string, unknown>): Topic => ({
     id: t.topicId ?? '',
     notionPageId: t.notionPageId ?? '',
     title: t.topicName ?? '',
