@@ -11,6 +11,8 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
+from pydantic import BaseModel, Field
+
 
 import boto3
 
@@ -28,6 +30,12 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+class ReviewQuestions(BaseModel):
+    questions: list[str] = Field(
+        description="A list of exactly 10 concise review questions."
+    )
 
 
 def _now_iso() -> str:
@@ -193,33 +201,28 @@ def _fetch_page_text(
 
 def _generate_questions(openai_client: Any, *, model: str, topic_name: str, content: str) -> list[str]:  # noqa: ANN401
     prompt = (
-        "Generate exactly 10 concise review questions for the topic below. "
-        "Return ONLY valid JSON: an array of 10 strings.\n\n"
+        "Generate exactly 10 concise review questions for the topic below.\n\n"
         f"Topic: {topic_name}\n\n"
         "Content:\n"
         f"{content[:12000]}"
     )
 
-    resp = openai_client.chat.completions.create(
+    resp = openai_client.beta.chat.completions.parse(
         model=model,
         messages=[
             {"role": "system", "content": "You are a helpful AI tutor."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
+        response_format=ReviewQuestions,
     )
 
-    text = (resp.choices[0].message.content or "").strip()
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            return [str(q).strip() for q in parsed if str(q).strip()][:10]
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback: split lines.
-    lines = [ln.strip(" -\t") for ln in text.splitlines() if ln.strip()]
-    return lines[:10]
+    # The SDK automatically parses the JSON response into our Pydantic model.
+    # We still slice [:10] just to guarantee the exact bounds in Python.
+    if resp.choices[0].message.parsed:
+        return resp.choices[0].message.parsed.questions[:10]
+    
+    return []
 
 
 def _update_job(request_id: str, updates: dict[str, Any]) -> None:

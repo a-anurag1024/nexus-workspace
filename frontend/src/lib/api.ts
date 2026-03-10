@@ -14,6 +14,7 @@ export interface Topic {
   notionPageUrl?: string;
   lastReviewed?: { start?: string; end?: string } | string | null;
   lastQuestionsJson?: string[] | string | null;
+  dateAdded?: string;
 }
 
 export interface ReviewJob {
@@ -24,6 +25,32 @@ export interface ReviewJob {
   status: 'queued' | 'processing' | 'completed' | 'failed';
   questions?: string[];
   error?: string;
+}
+
+/**
+ * Fetch all Notion topics (paginated, full list).
+ */
+export async function fetchAllTopics(): Promise<Topic[]> {
+  const res = await fetch(`${API_BASE_URL}/notion-review/all-topics`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch all topics: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  return (data.topics ?? []).map((t: Record<string, unknown>): Topic => ({
+    id: (t.topicId as string) ?? '',
+    notionPageId: (t.notionPageId as string) ?? '',
+    title: (t.topicName as string) ?? '',
+    subject: (t.subject as string) ?? undefined,
+    notionPageUrl: (t.notionPageUrl as string) ?? undefined,
+    lastReviewed: (t.lastReviewed as Topic['lastReviewed']) ?? null,
+    lastQuestionsJson: (t.lastQuestionsJson as Topic['lastQuestionsJson']) ?? null,
+    dateAdded: (t.dateAdded as string) ?? undefined,
+  }));
 }
 
 /**

@@ -271,6 +271,83 @@ def _get_topics(event: dict) -> dict:
     return _respond(200, {"topics": topics, "count": len(topics)})
 
 
+def _get_all_topics(event: dict) -> dict:
+    """Return all topics from Notion, paginating through the full data source."""
+    try:
+        notion = _get_notion_client()
+        database_id = _require_env("NOTION_TOPICS_DATABASE_ID")
+    except RuntimeError as exc:
+        logger.error("Notion configuration error: %s", exc)
+        return _respond(500, {"error": str(exc)})
+
+    try:
+        db_info = notion.databases.retrieve(database_id)
+        data_source_id = db_info["data_sources"][0]["id"]
+
+        all_results: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "data_source_id": data_source_id,
+                "sorts": [{"property": "Topic Name", "direction": "ascending"}],
+                "page_size": 100,
+            }
+            if cursor:
+                kwargs["start_cursor"] = cursor
+            response = notion.data_sources.query(**kwargs)
+            all_results.extend(response.get("results") or [])
+            if not response.get("has_more"):
+                break
+            cursor = response.get("next_cursor")
+    except APIResponseError as exc:
+        logger.exception("Notion API error querying all topics")
+        return _respond(502, {"error": "Notion API error", "details": str(exc)})
+
+    topics: list[dict[str, Any]] = []
+    for page in all_results:
+        props = page.get("properties") or {}
+
+        topic_name = _notion_property_value(props.get("Topic Name"))
+        date_added = _notion_property_value(props.get("Date Added"))
+        last_reviewed = _notion_property_value(props.get("Last Reviewed"))
+        topic_id = _notion_property_value(props.get("Topic ID"))
+        subject = _notion_property_value(props.get("Subject"))
+        notion_page_url_prop = _notion_property_value(props.get("Notion Page URL"))
+        last_questions_raw = _notion_property_value(props.get("Last Questions JSON"))
+
+        last_questions: Any = last_questions_raw
+        if isinstance(last_questions_raw, str) and last_questions_raw.strip():
+            try:
+                last_questions = json.loads(last_questions_raw)
+            except json.JSONDecodeError:
+                last_questions = last_questions_raw
+
+        topics.append(
+            {
+                "notionPageId": page.get("id"),
+                "notionPageUrl": notion_page_url_prop or page.get("url"),
+                "topicName": topic_name,
+                "dateAdded": date_added,
+                "lastReviewed": last_reviewed,
+                "subject": subject,
+                "topicId": topic_id,
+                "lastQuestionsJson": last_questions,
+                "fields": {
+                    "Topic Name": topic_name,
+                    "Date Added": date_added,
+                    "Last Questions JSON": last_questions,
+                    "Last Reviewed": last_reviewed,
+                    "Notion Page URL": notion_page_url_prop,
+                    "Subject": subject,
+                    "Topic ID": topic_id,
+                },
+                "notionProperties": props,
+            }
+        )
+
+    return _respond(200, {"topics": topics, "count": len(topics)})
+
+
 def _trigger_review(event: dict) -> dict:
     """Enqueue an async review job for the requested topic."""
     try:
@@ -560,6 +637,9 @@ def lambda_handler(event: dict, context) -> dict:  # noqa: ANN001
 
     if http_method == "GET" and path.endswith("/topics"):
         return _get_topics(event)
+
+    if http_method == "GET" and path.endswith("/all-topics"):
+        return _get_all_topics(event)
 
     if http_method == "POST" and path.endswith("/trigger"):
         return _trigger_review(event)

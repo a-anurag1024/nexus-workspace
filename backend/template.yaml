@@ -211,6 +211,12 @@ Resources:
             RestApiId: !Ref NexusApi
             Path: /notion-review/tracker
             Method: GET
+        GetAllTopics:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /notion-review/all-topics
+            Method: GET
 
   # ── Async review worker (uses shared SQS + DynamoDB) ─────────────────────
 

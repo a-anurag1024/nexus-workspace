@@ -10,6 +10,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import ProgressCalendar from '@/components/ProgressCalendar';
 import {
@@ -34,6 +35,19 @@ interface QueueItem {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * On Android/iOS, replace https:// with notion:// so the Notion app opens
+ * directly instead of the browser. Falls back to the web URL on desktop.
+ */
+function notionHref(webUrl: string): string {
+  if (typeof navigator === 'undefined') return webUrl;
+  const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (isMobile && webUrl.startsWith('https://')) {
+    return webUrl.replace('https://', 'notion://');
+  }
+  return webUrl;
+}
 
 function formatLastReviewed(lr: Topic['lastReviewed']): string {
   if (!lr) return 'Never reviewed';
@@ -273,16 +287,27 @@ export default function NotionReviewPage() {
                       Select the topics you&apos;d like to study today
                     </p>
                   </div>
-                  <button
-                    onClick={loadTopics}
-                    disabled={loadingTopics}
-                    className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
-                  >
-                    <svg className={`h-4 w-4 ${loadingTopics ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Refresh
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href="/notion-review/browse"
+                      className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                      </svg>
+                      Browse all
+                    </Link>
+                    <button
+                      onClick={loadTopics}
+                      disabled={loadingTopics}
+                      className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                    >
+                      <svg className={`h-4 w-4 ${loadingTopics ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Refresh
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -344,7 +369,7 @@ export default function NotionReviewPage() {
                                 </span>
                                 {topic.notionPageUrl && (
                                   <a
-                                    href={topic.notionPageUrl}
+                                    href={notionHref(topic.notionPageUrl)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
