@@ -180,6 +180,15 @@ Resources:
                 - s3:GetObject
                 - s3:PutObject
               Resource: !Sub "${ReviewTrackingBucket.Arn}/reviews/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "${ReviewTrackingBucket.Arn}/dsa_review/*"
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt ReviewTrackingBucket.Arn
       Events:
         GetTopics:
           Type: Api
@@ -216,6 +225,36 @@ Resources:
           Properties:
             RestApiId: !Ref NexusApi
             Path: /notion-review/all-topics
+            Method: GET
+        FetchDsaReviewTable:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /dsa-review/fetch_dsa_review_table
+            Method: GET
+        GetSelectedDsaProblems:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /dsa-review/get_selected_dsa_problem_numbers
+            Method: GET
+        GetDsaProblemMarkdown:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /dsa-review/get_dsa_problem_review_markdown
+            Method: GET
+        UpdateDsaReviewTable:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /dsa-review/update_dsa_review_table
+            Method: POST
+        GetDsaTracker:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /dsa-review/tracker
             Method: GET
 
   # ── Async review worker (uses shared SQS + DynamoDB) ─────────────────────

@@ -25,6 +25,19 @@ export default function HomePage() {
               LLM-powered review of your Notion study topics.
             </p>
           </Link>
+
+          <Link
+            href="/dsa-review"
+            className="group rounded-2xl bg-white p-6 shadow transition hover:shadow-md"
+          >
+            <div className="mb-3 text-3xl">🧩</div>
+            <h2 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600">
+              DSA Review
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Spaced-repetition LeetCode sessions with progress tracking.
+            </p>
+          </Link>
         </div>
       </main>
     </AuthGuard>

@@ -22,6 +22,14 @@ except Exception:  # pragma: no cover
     Client = None  # type: ignore[assignment]
     APIResponseError = Exception  # type: ignore[misc,assignment]
 
+from dsa_review_handler import (
+    fetch_dsa_review_table,
+    get_selected_dsa_problem_numbers,
+    get_dsa_problem_review_markdown,
+    update_dsa_review_table,
+    get_dsa_tracker,
+)
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -650,7 +658,23 @@ def lambda_handler(event: dict, context) -> dict:  # noqa: ANN001
     if http_method == "POST" and path.endswith("/log-review"):
         return _log_review(event)
 
-    if http_method == "GET" and path.endswith("/tracker"):
+    if http_method == "GET" and path.endswith("/notion-review/tracker"):
         return _get_tracker(event)
+
+    # --- DSA Review sub-app ---
+    if http_method == "GET" and path.endswith("/fetch_dsa_review_table"):
+        return fetch_dsa_review_table(event)
+
+    if http_method == "GET" and path.endswith("/get_selected_dsa_problem_numbers"):
+        return get_selected_dsa_problem_numbers(event)
+
+    if http_method == "GET" and path.endswith("/get_dsa_problem_review_markdown"):
+        return get_dsa_problem_review_markdown(event)
+
+    if http_method == "POST" and path.endswith("/update_dsa_review_table"):
+        return update_dsa_review_table(event)
+
+    if http_method == "GET" and path.endswith("/dsa-review/tracker"):
+        return get_dsa_tracker(event)
 
     return _respond(404, {"error": "Route not found"})

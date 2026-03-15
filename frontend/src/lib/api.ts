@@ -192,3 +192,123 @@ export async function fetchTracker(year?: number, month?: number): Promise<Track
 
   return res.json() as Promise<TrackerData>;
 }
+
+// ---------------------------------------------------------------------------
+// DSA Review
+// ---------------------------------------------------------------------------
+
+export interface DsaProblem {
+  problem_number: number;
+  problem_tag: string;
+  leetcode_url: string;
+  number_of_times_unanswered: number;
+  last_reviewed: string;   // "YYYY-MM-DD" or ""
+  number_of_times_reviewed: number;
+}
+
+export interface DsaProblemFull extends DsaProblem {
+  summary_file: string;
+}
+
+export interface DsaTrackerDayEntry {
+  problem_number: number;
+  problem_tag: string;
+  answered: boolean;
+}
+
+export interface DsaTrackerData {
+  year: number;
+  month: number;
+  days: Record<string, DsaTrackerDayEntry[]>;
+  reviewedDates: string[];
+  totalProblemsReviewed: number;
+}
+
+export interface DsaReviewResult {
+  problem_number: number;
+  answered: boolean;
+}
+
+/**
+ * Fetch algorithmically selected DSA problems for today's session.
+ */
+export async function fetchDsaSelectedProblems(): Promise<DsaProblem[]> {
+  const res = await fetch(
+    `${API_BASE_URL}/dsa-review/get_selected_dsa_problem_numbers`,
+    { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeaders() } },
+  );
+  if (!res.ok) throw new Error(`Failed to fetch DSA problems: ${res.status} ${res.statusText}`);
+  const data = await res.json();
+  return data.selected_problems ?? [];
+}
+
+/**
+ * Fetch the full DSA problems table.
+ */
+export async function fetchDsaAllProblems(): Promise<DsaProblemFull[]> {
+  const res = await fetch(
+    `${API_BASE_URL}/dsa-review/fetch_dsa_review_table`,
+    { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeaders() } },
+  );
+  if (!res.ok) throw new Error(`Failed to fetch DSA review table: ${res.status} ${res.statusText}`);
+  const data = await res.json();
+  return data.problems ?? [];
+}
+
+/**
+ * Fetch the markdown review notes for a specific DSA problem.
+ */
+export async function fetchDsaProblemMarkdown(
+  problem_number: number,
+  problem_tag: string,
+): Promise<string> {
+  const params = new URLSearchParams({
+    problem_number: String(problem_number),
+    problem_tag,
+  });
+  const res = await fetch(
+    `${API_BASE_URL}/dsa-review/get_dsa_problem_review_markdown?${params}`,
+    { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeaders() } },
+  );
+  if (!res.ok) {
+    if (res.status === 404) throw new Error('No review notes found for this problem.');
+    throw new Error(`Failed to fetch DSA markdown: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.markdown ?? '';
+}
+
+/**
+ * Submit review results (answered/unanswered) for a session.
+ */
+export async function updateDsaReview(
+  results: DsaReviewResult[],
+  reviewed_at?: string,
+): Promise<void> {
+  const body: Record<string, unknown> = { results };
+  if (reviewed_at) body.reviewed_at = reviewed_at;
+  const res = await fetch(`${API_BASE_URL}/dsa-review/update_dsa_review_table`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok && res.status !== 207) {
+    throw new Error(`Failed to update DSA review: ${res.status} ${res.statusText}`);
+  }
+}
+
+/**
+ * Fetch monthly DSA review tracking data for the calendar UI.
+ */
+export async function fetchDsaTracker(year?: number, month?: number): Promise<DsaTrackerData> {
+  const params = new URLSearchParams();
+  if (year !== undefined) params.set('year', String(year));
+  if (month !== undefined) params.set('month', String(month));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/dsa-review/tracker${qs}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch DSA tracker: ${res.status} ${res.statusText}`);
+  return res.json() as Promise<DsaTrackerData>;
+}
